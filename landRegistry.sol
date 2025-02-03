@@ -1,91 +1,142 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.20;
+pragma solidity ^0.8.0;
 
 contract LandRegistry {
+    // Structure to represent a land parcel
     struct Land {
         uint256 id;
         string location;
-        uint256 area;
+        uint256 area; // Area in square meters
         address owner;
-        bool isVerified;
-        uint256 price;
-        bool forSale;
+        bool registered;
     }
+
+    // Mapping from land ID to Land details
     mapping(uint256 => Land) public lands;
-    mapping(uint256 => bool) public landExists;
-    address public registrar;
-    uint256 public landCount;
 
-    event LandRegistered(uint256 id, address owner);
-    event LandTransferred(uint256 id, address newOwner);
-    event LandVerified(uint256 id, bool verified);
-    event LandListedForSale(uint256 id, uint256 price);
-    event LandSold(uint256 id, address buyer);
-    event VerificationRequested(uint256 id, address requester);
+    // Mapping from land ID to list of previous owners
+    mapping(uint256 => address[]) public landOwnershipHistory;
 
-    modifier onlyRegistrar() {
-        require(msg.sender == registrar, "Only registrar can verify land.");
-        _;
+    // Mapping from land ID to approved address for transfer
+    mapping(uint256 => address) public approvedTransfers;
+
+    // Event emitted when a new land is registered
+    event LandRegistered(uint256 indexed landId, string location, uint256 area, address indexed owner);
+
+    // Event emitted when land ownership is transferred
+    event OwnershipTransferred(uint256 indexed landId, address indexed oldOwner, address indexed newOwner);
+
+    // Event emitted when land details are updated
+    event LandDetailsUpdated(uint256 indexed landId, string newLocation, uint256 newArea);
+
+    // Event emitted when land is unregistered
+    event LandUnregistered(uint256 indexed landId);
+
+    // Register a new land parcel
+    function registerLand(uint256 _id, string memory _location, uint256 _area) public {
+        require(!lands[_id].registered, "Land already registered");
+
+        lands[_id] = Land({
+            id: _id,
+            location: _location,
+            area: _area,
+            owner: msg.sender,
+            registered: true
+        });
+
+        landOwnershipHistory[_id].push(msg.sender);
+
+        emit LandRegistered(_id, _location, _area, msg.sender);
     }
 
-    modifier onlyOwner(uint256 id) {
-        require(lands[id].owner == msg.sender, "Not the owner.");
-        _;
+    // Transfer ownership of a land parcel
+    function transferOwnership(uint256 _id, address _newOwner) public {
+        Land storage land = lands[_id];
+        require(land.registered, "Land not registered");
+        require(land.owner == msg.sender || approvedTransfers[_id] == msg.sender, "Only the owner or approved address can transfer ownership");
+
+        address oldOwner = land.owner;
+        land.owner = _newOwner;
+        landOwnershipHistory[_id].push(_newOwner);
+
+        if (approvedTransfers[_id] == msg.sender) {
+            delete approvedTransfers[_id];
+        }
+
+        emit OwnershipTransferred(_id, oldOwner, _newOwner);
     }
 
-    constructor() {
-        registrar = msg.sender;
+    // Approve another address to transfer ownership
+    function approveTransfer(uint256 _id, address _approved) public {
+        Land storage land = lands[_id];
+        require(land.registered, "Land not registered");
+        require(land.owner == msg.sender, "Only the owner can approve transfer");
+
+        approvedTransfers[_id] = _approved;
     }
 
-    function registerLand(string memory _location, uint256 _area) public {
-        landCount++;
-        lands[landCount] = Land(
-            landCount,
-            _location,
-            _area,
-            msg.sender,
-            false,
-            0,
-            false
-        );
-        landExists[landCount] = true;
-        emit LandRegistered(landCount, msg.sender);
+    // Update land details
+    function updateLandDetails(uint256 _id, string memory _newLocation, uint256 _newArea) public {
+        Land storage land = lands[_id];
+        require(land.registered, "Land not registered");
+        require(land.owner == msg.sender, "Only the owner can update land details");
+
+        land.location = _newLocation;
+        land.area = _newArea;
+
+        emit LandDetailsUpdated(_id, _newLocation, _newArea);
     }
 
-    function transferLand(uint256 id, address newOwner) public onlyOwner(id) {
-        require(landExists[id], "Land does not exist.");
-        lands[id].owner = newOwner;
-        lands[id].forSale = false;
-        emit LandTransferred(id, newOwner);
+    // Unregister land
+    function unregisterLand(uint256 _id) public {
+        Land storage land = lands[_id];
+        require(land.registered, "Land not registered");
+        require(land.owner == msg.sender, "Only the owner can unregister land");
+
+        land.registered = false;
+
+        emit LandUnregistered(_id);
     }
 
-    function requestVerification(uint256 id) public onlyOwner(id) {
-        require(landExists[id], "Land does not exist.");
-        emit VerificationRequested(id, msg.sender);
+    // Check if an address is the owner of a land parcel
+    function isOwner(uint256 _id, address _owner) public view returns (bool) {
+        return lands[_id].owner == _owner;
     }
 
-    function verifyLand(uint256 id) public onlyRegistrar {
-        require(landExists[id], "Land does not exist.");
-        lands[id].isVerified = true;
-        emit LandVerified(id, true);
+    // Get land details
+    function getLand(uint256 _id) public view returns (uint256, string memory, uint256, address, bool) {
+        Land memory land = lands[_id];
+        require(land.registered, "Land not registered");
+
+        return (land.id, land.location, land.area, land.owner, land.registered);
     }
 
-    function listLandForSale(uint256 id, uint256 price) public onlyOwner(id) {
-        require(landExists[id], "Land does not exist.");
-        lands[id].price = price;
-        lands[id].forSale = true;
-        emit LandListedForSale(id, price);
+    // Check if land is registered
+    function isLandRegistered(uint256 _id) public view returns (bool) {
+        return lands[_id].registered;
     }
 
-    function buyLand(uint256 id) public payable {
-        require(landExists[id], "Land does not exist.");
-        require(lands[id].forSale, "Land is not for sale.");
-        require(msg.value >= lands[id].price, "Insufficient funds.");
+    // Get ownership history of a land parcel
+    function getOwnershipHistory(uint256 _id) public view returns (address[] memory) {
+        return landOwnershipHistory[_id];
+    }
 
-        address payable seller = payable(lands[id].owner);
-        seller.transfer(msg.value);
-        lands[id].owner = msg.sender;
-        lands[id].forSale = false;
-        emit LandSold(id, msg.sender);
+    // List all registered land parcels
+    function listAllLands() public view returns (Land[] memory) {
+        uint256 count = 0;
+        for (uint256 i = 0; i < type(uint256).max; i++) {
+            if (lands[i].registered) {
+                count++;
+            } else {
+                break;
+            }
+        }
+
+        Land[] memory allLands = new Land[](count);
+        for (uint256 i = 0; i < count; i++) {
+            allLands[i] = lands[i];
+        }
+
+        return allLands;
     }
 }
